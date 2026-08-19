@@ -228,6 +228,33 @@ tbody tr:hover{background:var(--lar-suave)}
 .add-coment{display:flex;gap:8px;margin-top:8px}
 .add-coment input{flex:1}
 
+/* ============ AUDITORIA / HISTÓRICO ============ */
+.aba-modal{
+  border:1px solid var(--cz-300);background:var(--branco);color:var(--cz-500);
+  padding:6px 14px;border-radius:99px;font-weight:600;font-size:.78rem;cursor:pointer;
+  font-family:var(--fonte);transition:all .15s ease;
+}
+.aba-modal.ativa{background:var(--cz-900);border-color:var(--cz-900);color:#fff}
+.lista-auditoria{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;padding:2px}
+.audit-item{
+  border:1px solid var(--cz-200);border-radius:10px;padding:10px 14px;
+  background:var(--branco);border-left:4px solid var(--cz-300);
+}
+.audit-item.a-status{border-left-color:var(--azu)}
+.audit-item.a-conclusao{border-left-color:var(--ver)}
+.audit-item.a-edicao{border-left-color:var(--lar)}
+.audit-item.a-criacao{border-left-color:var(--cz-500)}
+.audit-meta{font-size:.68rem;font-weight:700;color:var(--cz-500);margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.audit-meta .quem{color:var(--cz-900);font-weight:800}
+.audit-meta .tipo{padding:2px 8px;border-radius:99px;font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+.audit-meta .tipo.t-status{background:var(--azu-suave);color:var(--azu)}
+.audit-meta .tipo.t-conclusao{background:var(--ver-suave);color:var(--ver)}
+.audit-meta .tipo.t-edicao{background:var(--lar-suave);color:var(--lar-forte)}
+.audit-meta .tipo.t-criacao{background:var(--cz-100);color:var(--cz-700)}
+.audit-detalhe{font-size:.82rem;color:var(--cz-700);margin-top:3px}
+.audit-detalhe .de{text-decoration:line-through;color:var(--vrm);margin-right:4px}
+.audit-detalhe .para{color:var(--ver);font-weight:700}
+.audit-vazio{text-align:center;padding:30px;color:var(--cz-500);font-size:.82rem}
 /* ============ AVISOS / VAZIO ============ */
 .vazio{text-align:center;padding:50px 20px;color:var(--cz-500)}
 .vazio .icone{font-size:2.4rem;margin-bottom:8px}
@@ -377,9 +404,17 @@ tbody tr:hover{background:var(--lar-suave)}
   <div class="modal">
     <div class="modal-topo">
       <h2 id="tituloModal">Nova demanda</h2>
-      <button class="btn btn-fant btn-mini" onclick="fecharModal()">✕ Fechar</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="aba-modal ativa" id="abaFormBtn" onclick="trocarAbaModal('form')">Dados</button>
+        <button class="aba-modal" id="abaHistBtn" onclick="trocarAbaModal('hist')" style="display:none">📋 Histórico</button>
+        <button class="btn btn-fant btn-mini" onclick="fecharModal()">✕ Fechar</button>
+      </div>
     </div>
     <div class="modal-corpo">
+      <div id="painelHist" style="display:none">
+        <div id="listaAuditoria" class="lista-auditoria"></div>
+      </div>
+      <div id="painelForm">
       <div class="grade-form">
         <div class="divisor-secao">Identificação</div>
         <div class="campo larga">
@@ -455,6 +490,7 @@ tbody tr:hover{background:var(--lar-suave)}
         </div>
       </div>
     </div>
+      </div><!-- /painelForm -->
     <div class="modal-rodape">
       <button class="btn btn-vrm btn-mini" id="btnExcluir" onclick="excluirDemanda()" style="display:none">Excluir</button>
       <div class="direita">
@@ -769,6 +805,8 @@ function trocaRapida(id, sel){
   // Escrita delta-direct: atualiza só os campos alterados no nó da demanda
   db.ref(NO_RAIZ + "/demandas/" + id).update(mudanca)
     .then(() => {
+      const anterior = demandas[id].status || "Não iniciado";
+      registrarAuditoria(id, "status", "Status", anterior, valor, demandas[id].quem);
       Object.assign(demandas[id], mudanca);
       renderizarTudo();
       mostrarToast("Demanda #" + (demandas[id].item||"") + " → " + valor);
@@ -797,6 +835,9 @@ function abrirModal(id){
   document.getElementById("tituloModal").textContent = d ? ("Demanda #" + (d.item||"") ) : "Nova demanda";
   document.getElementById("btnExcluir").style.display  = d ? "inline-flex" : "none";
   document.getElementById("btnConcluir").style.display = (d && d.status !== "Concluído") ? "inline-flex" : "none";
+  document.getElementById("abaHistBtn").style.display  = d ? "inline-flex" : "none";
+  // Volta sempre para aba de dados ao abrir
+  trocarAbaModal("form");
 
   document.getElementById("mObjetivo").value = d?.objetivo || "";
   document.getElementById("mOque").value     = d?.oque || "";
@@ -881,6 +922,9 @@ function salvarDemanda(){
   // Sem config: mantém só em memória para o usuário testar a interface
   if(!db){
     const id = idEditando || ("local_" + Date.now());
+    const quemAcao = dados.quem;
+    if(idEditando){ auditarEdicao(id, demandas[idEditando]||{}, dados, quemAcao); }
+    else { registrarAuditoria(id, "criacao", "Criação", "", dados.objetivo, quemAcao); }
     demandas[id] = dados;
     fecharModal(); renderizarTudo();
     mostrarToast("Salvo apenas em memória (configure o Firebase)");
@@ -894,7 +938,19 @@ function salvarDemanda(){
 
   ref.set(dados)
     .then(() => {
-      demandas[ref.key || idEditando] = dados;
+      const novoId = ref.key || idEditando;
+      const quemAcao = dados.quem;
+      if(idEditando){
+        // Compara antes x depois e registra só o que mudou
+        auditarEdicao(novoId, demandas[idEditando] || {}, dados, quemAcao);
+        if(dados.status === "Concluído" && (demandas[idEditando]||{}).status !== "Concluído"){
+          registrarAuditoria(novoId, "conclusao", "Conclusão", "", dados.evidencia||"(sem evidência)", quemAcao);
+        }
+      } else {
+        // Criação: registro único
+        registrarAuditoria(novoId, "criacao", "Criação", "", dados.objetivo, quemAcao);
+      }
+      demandas[novoId] = dados;
       fecharModal(); renderizarTudo();
       mostrarToast(idEditando ? "Demanda atualizada" : "Demanda #" + dados.item + " criada");
     })
@@ -966,6 +1022,102 @@ function mostrarToast(msg){
   t.classList.add("mostrar");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("mostrar"), 2600);
+}
+
+/* =====================================================================
+   AUDITORIA — log imutável de cada alteração
+   Estrutura de cada registro no Firebase:
+   { ts, quem, tipo, campo, de, para }
+   ts   = ISO timestamp (ordem cronológica, nunca editável)
+   quem = responsável selecionado no modal no momento da ação
+   tipo = 'criacao' | 'edicao' | 'status' | 'conclusao'
+   de   = valor anterior (string)
+   para = valor novo (string)
+   ===================================================================== */
+
+// Grava UM registro de auditoria no nó da demanda
+function registrarAuditoria(idDemanda, tipo, campo, de, para, quem){
+  const reg = {
+    ts:    new Date().toISOString(),
+    quem:  quem || "?",
+    tipo, campo, de: String(de||""), para: String(para||"")
+  };
+  if(!db){
+    // modo memória: empilha no objeto local apenas
+    const d = demandas[idDemanda];
+    if(d){ d._audit = d._audit || []; d._audit.push(reg); }
+    return;
+  }
+  // push() gera chave cronológica automática no Firebase
+  db.ref(NO_RAIZ + "/demandas/" + idDemanda + "/audit").push(reg)
+    .catch(err => console.warn("Auditoria falhou:", err));
+}
+
+// Compara dois snapshots da demanda e registra cada campo alterado
+function auditarEdicao(idDemanda, antes, depois, quem){
+  const campos = [
+    ["objetivo","Objetivo"], ["oque","O quê"], ["porque","Por quê"],
+    ["quem","Responsável"], ["quem2","Apoio"], ["onde","Onde"],
+    ["inicio","Início"], ["fim","Fim"],
+    ["como","Como"], ["quanto","Quanto"],
+    ["projeto","Projeto"], ["evidencia","Evidência"]
+  ];
+  campos.forEach(([key, label]) => {
+    const vAntes = String(antes[key]||"").trim();
+    const vDepois = String(depois[key]||"").trim();
+    if(vAntes !== vDepois){
+      registrarAuditoria(idDemanda, vAntes===""?"criacao":"edicao", label, vAntes, vDepois, quem);
+    }
+  });
+}
+
+// Renderiza o painel de histórico no modal
+function renderizarHistorico(idDemanda){
+  const el = document.getElementById("listaAuditoria");
+  if(!idDemanda){ el.innerHTML = '<div class="audit-vazio">Salve a demanda primeiro para ver o histórico.</div>'; return; }
+  const d = demandas[idDemanda];
+  // Coleta registros: Firebase ou memória
+  const registros = d?.audit
+    ? Object.values(d.audit).sort((a,b) => b.ts.localeCompare(a.ts))
+    : (d?._audit || []).slice().reverse();
+  if(!registros.length){
+    el.innerHTML = '<div class="audit-vazio">Nenhuma alteração registrada ainda.</div>'; return;
+  }
+  const TIPO_CSS  = { criacao:"t-criacao", edicao:"t-edicao", status:"t-status", conclusao:"t-conclusao" };
+  const TIPO_NOME = { criacao:"Criação", edicao:"Edição", status:"Status", conclusao:"Conclusão" };
+  el.innerHTML = registros.map(r => {
+    const dt = new Date(r.ts);
+    const quando = dt.toLocaleDateString("pt-BR") + " " + dt.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
+    const tipoClass = TIPO_CSS[r.tipo] || "t-edicao";
+    const tipoNome  = TIPO_NOME[r.tipo] || r.tipo;
+    const detalhe = r.de && r.para
+      ? `<div class="audit-detalhe"><strong>${r.campo}:</strong> <span class="de">${esc(r.de)}</span> → <span class="para">${esc(r.para)}</span></div>`
+      : r.para ? `<div class="audit-detalhe"><strong>${r.campo}:</strong> <span class="para">${esc(r.para)}</span></div>` : "";
+    return `<div class="audit-item a-${r.tipo}">
+      <div class="audit-meta">
+        <span class="quem">${esc(r.quem)}</span>
+        <span class="quando">${quando}</span>
+        <span class="tipo ${tipoClass}">${tipoNome}</span>
+      </div>
+      ${detalhe}
+    </div>`;
+  }).join("");
+}
+
+// Troca entre aba Dados e aba Histórico no modal
+function trocarAbaModal(aba){
+  const form = document.getElementById("painelForm");
+  const hist = document.getElementById("painelHist");
+  const btnF = document.getElementById("abaFormBtn");
+  const btnH = document.getElementById("abaHistBtn");
+  if(aba === "hist"){
+    form.style.display = "none"; hist.style.display = "block";
+    btnF.classList.remove("ativa"); btnH.classList.add("ativa");
+    renderizarHistorico(idEditando);
+  } else {
+    hist.style.display = "none"; form.style.display = "block";
+    btnH.classList.remove("ativa"); btnF.classList.add("ativa");
+  }
 }
 
 /* =====================================================================
